@@ -45,6 +45,30 @@ get_postgres_server_port() {
     echo "$(sudo netstat -lptn | grep "^tcp " | grep postgres | sed 's/\s\+/ /g' | cut -d ' ' -f4 | cut -d ':' -f2)"
 }
 
+start_postgres_daemon() {
+    PGUSER=postgres
+    PGDATA="/var/lib/postgres/data"
+    PGLOG="$PGDATA/serverlog"
+
+    if [ ! -d "$PGDATA" ]; then
+        mkdir $PGDATA
+        chown -R $PGUSER:$PGUSER $PGDATA
+    fi
+
+    INIT_COMMAND="initdb --locale en_US.UTF-8 -E UTF8 -D '$PGDATA'"
+    su $PGUSER -c "$INIT_COMMAND"
+
+    echo "[+] Starting PostgreSQL ..." 1>&2
+    START_COMMAND="postgres -D '$PGDATA' &"
+    su $PGUSER -c "$START_COMMAND" >>$PGLOG 2>$PGLOG
+
+    #Check the logfile for errors.
+    status=$(cat $PGLOG | grep "fail" | wc -l)
+    if [ "$status" == "0" ]; then
+        echo "[+] PostgreSQL server successfully started!" 1>&2
+    fi
+}
+
 # Bail out if not root privileges
 if [ "$(id -u)" != "0" ]; then
    echo "This script must be run as root" 1>&2
@@ -78,11 +102,17 @@ if [ -z "$postgres_server_ip" ]; then
         systemctl_bin=$(which systemctl | wc -l)
         if [ "$service_bin" = "1" ]; then
             service postgresql start
+            status=$(service postgresql status | grep "active" | wc -l)
         elif [ "$systemctl_bin" = "1" ]; then
             systemctl start postgresql
+            status=$(systemctl status postgresql | grep "active" | wc -l)
         else
             echo "[+] We couldn't determine how to start the postgres server, please start it and rerun this script"
             exit 1
+        fi
+        if [ "$status" != "1" ]; then
+            echo "[+] Starting failed because postgreSQL service is not available! Initializing your db ..."
+            start_postgres_daemon
         fi
     else
         echo "[+] On DEBIAN based distro [i.e Kali, Ubuntu etc..]"
